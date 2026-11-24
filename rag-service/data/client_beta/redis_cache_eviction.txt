@@ -1,0 +1,25 @@
+# Client Beta - Redis Cluster Cache Eviction Runbook
+Doc Type: Runbook
+Client: client_beta
+Target System: AWS ElastiCache Redis Cluster (beta-cache-prod)
+
+## Overview & Symptoms:
+- Alert: Redis EvictedKeys rate > 2500 keys/sec.
+- Cache hit ratio degraded below 70% (normal baseline > 94%).
+- Database read replica CPU load spikes due to cache misses.
+
+## Diagnostic Steps:
+1. Check CloudWatch ElastiCache metrics: `BytesUsedForCache`, `FreeableMemory`, and `CacheHitRate`.
+2. Connect to Redis read replica and inspect memory usage:
+   `INFO memory` -> inspect `used_memory_human` vs `maxmemory_human`.
+3. Check slow log for costly queries:
+   `SLOWLOG GET 15`
+
+## Remediation Steps:
+1. Clear non-essential cached keys with wildcards (e.g., temporary session telemetry):
+   `redis-cli -h beta-cache-prod.internal -p 6379 --scan --pattern "beta:session:temp:*" | xargs -L 100 redis-cli -h beta-cache-prod.internal DEL`
+2. Modify cache policy if necessary to ensure LRU key eviction:
+   Verify `maxmemory-policy` parameter group is set to `volatile-lru` or `allkeys-lru`.
+3. If sustained traffic increase is legitimate, initiate vertical node resize via AWS CLI:
+   `aws elasticache modify-cache-cluster --cache-cluster-id beta-cache-prod --cache-node-type cache.r6g.xlarge --apply-immediately`
+4. Confirm hit ratio returns above 90% and post incident report to `#beta-infra`.

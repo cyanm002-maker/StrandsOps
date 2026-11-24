@@ -1,0 +1,29 @@
+# Client Beta - Kubernetes Pod OOMKilled Runbook
+Doc Type: Runbook
+Client: client_beta
+Target System: AWS EKS Cluster (beta-core-prod) / Namespace: processing
+
+## Overview & Symptoms:
+- Prometheus Alert: KubePodCrashLooping / Container terminated with exit code 137 (OOMKilled).
+- Affected Deployment: `beta-data-processor` handling background ETL jobs.
+- High message lag on Apache Kafka consumer topic `beta.telemetry.raw`.
+
+## Diagnostic Steps:
+1. Inspect crashed pods in the namespace:
+   `kubectl get pods -n processing -l app=beta-data-processor`
+2. Describe crashing pod to verify Out Of Memory termination:
+   `kubectl describe pod <pod_name> -n processing | grep -A 8 "Last State"`
+   Expected confirmation: `Reason: OOMKilled, Exit Code: 137`.
+3. Check memory consumption metrics:
+   `kubectl top pods -n processing -l app=beta-data-processor`
+
+## Remediation Steps:
+1. Increase container memory limits dynamically in the deployment specification:
+   `kubectl set resources deployment beta-data-processor -n processing --limits=memory=4Gi --requests=memory=2Gi`
+2. Verify rolling update stabilization:
+   `kubectl rollout status deployment/beta-data-processor -n processing`
+3. If memory leak is caused by JVM heap misconfiguration, update JVM options in ConfigMap:
+   Set `-XX:MaxRAMPercentage=75.0` to prevent JVM off-heap allocations from breaching cgroup limits.
+4. Scale horizontal pod autoscaler (HPA) to distribute load:
+   `kubectl scale deployment beta-data-processor -n processing --replicas=8`
+5. Send incident resolution summary to Slack channel `#beta-ops-alerts`.

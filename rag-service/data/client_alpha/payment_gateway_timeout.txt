@@ -1,0 +1,23 @@
+# Client Alpha - Payment Gateway Timeout Runbook
+Doc Type: Runbook
+Client: client_alpha
+Target System: Checkout Service & Stripe Egress Gateway
+
+## Overview & Symptoms:
+- Alert: Upstream Gateway 504 Gateway Timeout on Stripe API calls.
+- High latency (> 8000ms) on customer payment authorizations.
+- Dead Letter Queue (DLQ) messages exceeding threshold (> 50 messages/min).
+
+## Diagnostic Steps:
+1. Verify external third-party status at https://status.stripe.com.
+2. Check AWS VPC NAT Gateway metrics: check `ErrorPortAllocation` and `PacketsDropCount`.
+3. Check application logs in CloudWatch Insights:
+   `fields @timestamp, @message | filter @message like /StripeConnectionException/ or @message like /ReadTimeoutException/`
+
+## Remediation Steps:
+1. If third-party provider is experiencing high error rates, switch customer checkout to secondary processor (Adyen):
+   Run admin command: `alpha-ops feature-flag set --client=client_alpha --flag=PAYMENT_GATEWAY_FALLBACK --value=ADYEN`
+2. Increase HTTP client connect/read timeout in checkout configuration from 5s to 12s if network jitter is detected.
+3. Once Stripe service recovers, run replay worker to process pending DLQ transactions:
+   `npm run cli:replay-payment-dlq -- --client=client_alpha --batch-size=100`
+4. Notify on-call payments engineer on Slack `#alpha-payments`.

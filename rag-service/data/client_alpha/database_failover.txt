@@ -1,0 +1,26 @@
+# Client Alpha - PostgreSQL RDS Failover Runbook
+Doc Type: Runbook
+Client: client_alpha
+Target System: RDS PostgreSQL Primary Cluster (alpha-db-prod)
+
+## Overview & Symptoms:
+- CloudWatch Alert: DatabaseConnections > 95% pool exhaustion.
+- CloudWatch Alert: ReplicationLag > 300 seconds on read replicas.
+- Application error rate spike: HTTP 500 errors on /api/v1/checkout and /api/v1/orders.
+
+## Diagnostic Steps:
+1. Verify RDS CPU Utilization and active connection count in AWS CloudWatch.
+2. Connect to RDS primary instance using read-only bastion and inspect connection states:
+   `SELECT count(*), state, wait_event_type, wait_event FROM pg_stat_activity GROUP BY state, wait_event_type, wait_event;`
+3. Identify long-running blocking queries or lock contention:
+   `SELECT pid, now() - query_start AS duration, query FROM pg_stat_activity WHERE state != 'idle' ORDER BY duration DESC LIMIT 5;`
+4. Confirm replica health on read replica `alpha-db-replica-01`.
+
+## Remediation / Recovery Steps:
+1. If the primary database instance is unresponsive or deadlock cascades are observed, initiate Multi-AZ failover:
+   `aws rds reboot-db-instance --db-instance-identifier alpha-db-prod --force-failover`
+2. Wait 60 to 90 seconds for DNS propagation of the primary cluster endpoint (`alpha-db-prod.internal.alpha.net`).
+3. Terminate runaway transactions if failover is not required:
+   `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE state = 'active' AND query_start < now() - interval '5 minutes';`
+4. Post status update to Slack channel `#alpha-incident-war-room`.
+5. Verify application transaction error rate drops back to < 0.1%.
