@@ -1,12 +1,30 @@
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from dotenv import load_dotenv
+
+# Base paths
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Automatically load environment variables from .env (both rag-service/.env and workspace root .env)
+load_dotenv(BASE_DIR / ".env")
+load_dotenv(BASE_DIR.parent / ".env")
+
 # Disable Chroma anonymous telemetry to suppress external network call warnings
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
-# Ensure huggingface works fully offline once model is cached
-os.environ["HF_HUB_OFFLINE"] = "1"
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
+# Hugging Face API Token (used during deployment or model downloads)
+HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN")
+if HF_TOKEN:
+    os.environ["HF_TOKEN"] = HF_TOKEN
+    os.environ["HUGGINGFACEHUB_API_TOKEN"] = HF_TOKEN
+
+# Only enable offline mode if explicitly set by user (keeps local fast, allows cloud deploy to download)
+if os.getenv("HF_HUB_OFFLINE", "").lower() in ("1", "true"):
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 import chromadb
 from chromadb.config import Settings
@@ -14,23 +32,28 @@ from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 
-# Base paths
-BASE_DIR = Path(__file__).resolve().parent.parent
+logger = logging.getLogger("rag_service.vectorstore")
+
 DEFAULT_PERSIST_DIR = BASE_DIR / "chroma_db"
 COLLECTION_NAME = "opsranger_runbooks"
-EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2")
 
 _embeddings: Optional[HuggingFaceEmbeddings] = None
 _vector_store: Optional[Chroma] = None
 
 
 def get_embeddings() -> HuggingFaceEmbeddings:
-    """Initialize and return the local HuggingFace embeddings model."""
+    """Initialize and return the HuggingFace embeddings model."""
     global _embeddings
     if _embeddings is None:
+        model_kwargs: Dict[str, Any] = {"device": "cpu"}
+        if HF_TOKEN:
+            model_kwargs["token"] = HF_TOKEN
+            logger.info("Using configured Hugging Face API token for model loading.")
+
         _embeddings = HuggingFaceEmbeddings(
             model_name=EMBEDDING_MODEL_NAME,
-            model_kwargs={"device": "cpu"},
+            model_kwargs=model_kwargs,
             encode_kwargs={"normalize_embeddings": True},
         )
     return _embeddings
@@ -101,8 +124,6 @@ def query_runbooks(
 
     formatted_results = []
     for doc, distance in results_with_scores:
-        # Cosine distance ranges from 0 (identical) to 2 (opposite)
-        # Convert to an intuitive similarity score between 0.0 and 1.0
         similarity_score = max(0.0, 1.0 - (distance / 2.0))
         formatted_results.append(
             {
