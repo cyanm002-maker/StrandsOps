@@ -25,6 +25,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("rag_service.main")
+logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
 
 DATA_DIR = CURRENT_DIR / "data"
 PERSIST_DIR = CURRENT_DIR / "chroma_db"
